@@ -1,6 +1,7 @@
 package com.progressoft.clusterdata.service;
 
 
+import com.progressoft.clusterdata.dto.DealImportResponse;
 import com.progressoft.clusterdata.dto.DealRequest;
 import com.progressoft.clusterdata.entity.Deal;
 import com.progressoft.clusterdata.repository.DealRepository;
@@ -14,6 +15,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Service
 @Slf4j
@@ -29,8 +31,15 @@ public class DealService {
         this.executor = Executors.newFixedThreadPool(10);
     }
 
-    public void processDeals(List<DealRequest> requests) {
-        if(null == requests || requests.isEmpty()) return;
+    public DealImportResponse processDeals(List<DealRequest> requests) {
+        if(null == requests || requests.isEmpty()) return DealImportResponse.builder()
+                .totalReceived(0)
+                .successfulImports(0)
+                .failedOrSkipped(0)
+                .build();
+
+        AtomicInteger successCount = new AtomicInteger(0);
+        AtomicInteger failedCount = new AtomicInteger(0);
 
         List<CompletableFuture<Void>> futures = new ArrayList<>();
 
@@ -40,7 +49,7 @@ public class DealService {
             List<DealRequest> chunk = requests.subList(i, end);
 
             CompletableFuture<Void> future = CompletableFuture.runAsync(
-                    () -> processChunk(chunk),
+                    () -> processChunk(chunk, successCount, failedCount),
                     executor
             );
             futures.add(future);
@@ -48,9 +57,14 @@ public class DealService {
 
         CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
         log.info("Finished processing all {} deals", requests.size());
+        return DealImportResponse.builder()
+                .totalReceived(requests.size())
+                .successfulImports(successCount.get())
+                .failedOrSkipped(failedCount.get())
+                .build();
     }
 
-    private void processChunk(List<DealRequest> chunk) {
+    private void processChunk(List<DealRequest> chunk, AtomicInteger successCount, AtomicInteger failedCount) {
         List<String> incomingIds = chunk.stream()
                 .map(DealRequest::dealUniqueId)
                 .toList();
@@ -61,6 +75,7 @@ public class DealService {
                 .filter(req -> {
                     if(existingIds.contains(req.dealUniqueId())) {
                         log.warn("Duplicate deal ignored: {}", req.dealUniqueId());
+                        failedCount.incrementAndGet();
                         return false;
                     }
                     return true;
@@ -75,8 +90,10 @@ public class DealService {
                                 .dealAmount(req.dealAmount())
                                 .build();
                         dealRepository.save(deal);
+                        successCount.incrementAndGet();
                     } catch (Exception e) {
                         log.error("Failed to save deal: {}", req.dealUniqueId());
+                        failedCount.incrementAndGet();
                     }
                 });
     }
