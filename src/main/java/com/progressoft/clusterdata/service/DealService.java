@@ -28,7 +28,11 @@ public class DealService {
 
     public DealService(DealRepository dealRepository) {
         this.dealRepository = dealRepository;
-        this.executor = Executors.newFixedThreadPool(10);
+        this.executor = Executors.newFixedThreadPool(10, r -> {
+            Thread t = new Thread(r);
+            t.setDaemon(true);
+            return t;
+        });
     }
 
     public DealImportResponse processDeals(List<DealRequest> requests) {
@@ -100,6 +104,9 @@ public class DealService {
 
     @PreDestroy
     public void shutdown() {
-        executor.shutdown();
+        if(executor != null && !executor.isShutdown()) {
+            log.info("Shutting down ExecutorService...");
+            executor.shutdown();
+        }
     }
 }
